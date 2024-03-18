@@ -66,10 +66,46 @@ object Options extends App {
     }
   }
   // try to establish a connection -- if so, print the connect method
-  //val host: Option[String] = Some("host")
-  //val port: Option[String] = Some("port")
-  val host = config.get("host")
-  val port = config.get("port")
+  val host       = config.get("host")
+  val port       = config.get("port")
   val connection = host.flatMap(h => port.flatMap(p => Connection.apply(h, p)))
-  val connectionStatus = connection.map(c => c.connect)
+
+  // below is how I would have done it. Can use flatMap do this kind of pattern matching.
+  // Very helpful and unique. Harder to read imo, but also very concise. Understand this
+  val connectionUsingMatch = host match {
+    case Some(h) => {
+      port match {
+        case Some(p) => Connection.apply(h, p)
+        case None       => None
+      }
+    }
+    case None => None
+  }
+  val connectionStatus           = connection.map(c => c.connect)
+  val connectionStatusUsingMatch = connectionUsingMatch.map(c => c.connect)
+  // println(connectionStatus)
+  // println(connectionStatusUsingMatch)
+  connectionStatus.foreach(println)
+
+  // chained solution
+  config
+    .get("host")
+    .flatMap(host =>
+      config
+        .get("port")
+        .flatMap(port => Connection(host, port))
+        .map(connection => connection.connect)
+    )
+    .foreach(println)
+
+  // for comprehensions
+  val forConnectionStatus = for {
+    host       <- config.get("host")
+    port       <- config.get("port")
+    connection <- Connection(host, port)
+  } yield connection.connect
+  forConnectionStatus.foreach(println)
+
+  // the for way of writing is much more readable. Very preferred.
+
 }
