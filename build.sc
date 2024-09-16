@@ -15,3 +15,16 @@ object exercises extends ScalaModule {
     "-Ymacro-annotations"
   )
 }
+object advent2023 extends ScalaModule {
+  def scalaVersion = "2.13.12"
+  def scalacOptions = Seq(
+    "-unchecked",
+    "-deprecation",
+    "-language:reflectiveCalls",
+    "-feature",
+    "-Xcheckinit",
+    "-Ywarn-dead-code",
+    "-Ywarn-unused",
+    "-Ymacro-annotations"
+  )
+}
