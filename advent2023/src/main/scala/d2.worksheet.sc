@@ -2,7 +2,7 @@
 // Read d2_games.txt and parse it into game, ID, GROUP , semicolon, GROUP ... END with no semicolon
 import scala.collection.mutable.ListBuffer
 
-val games = scala.io.Source.fromFile("d2_games.txt").getLines().toList
+val games = scala.io.Source.fromFile("files/d2_games.txt").getLines().toList
 
 val gameR = "Game \\d+".r
 val numR = "\\d+".r
