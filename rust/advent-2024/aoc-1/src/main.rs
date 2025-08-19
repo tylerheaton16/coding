@@ -33,10 +33,13 @@ fn main() -> io::Result<()> {
 
     println!("the sum of v3 is {}", v3.iter().sum::<i32>());
 
+    get_similarity_score(v1, v2);
+
 
     Ok(())
 }
 
+//Part 1
 fn get_difference_and_store(a: &str, b: &str) -> i32 {
     let a_int: i32 = a.parse().unwrap_or(0);
     let b_int: i32 = b.parse().unwrap_or(0);
@@ -44,9 +47,21 @@ fn get_difference_and_store(a: &str, b: &str) -> i32 {
     (a_int - b_int).abs()
 }
 
-//struct LocationIDs<T> {
-//    ids: Vec<(T)>
-//}
-//
-//impl LocationIDs<T> {
-//}
+//Part 2
+fn get_similarity_score(v1: Vec<String>, v2: Vec<String>) {
+    let mut similarity_score = 0;
+    let mut num_repeated;
+
+    for n in &v1 {
+        num_repeated = 0;
+
+        for m in &v2 {
+              if n == m {
+                  num_repeated += 1;
+              }
+        }
+        similarity_score += n.parse().unwrap_or(0) * num_repeated;
+    }
+
+    println!("similarity_score is {similarity_score}");
+}
