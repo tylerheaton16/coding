@@ -78,14 +78,6 @@ fn main() {
     }
 }
 
-fn get_identifier(node: RefNode) -> Option<Locate> {
-    // unwrap_node! can take multiple types
-    match unwrap_node!(node, SimpleIdentifier, EscapedIdentifier) {
-        Some(RefNode::SimpleIdentifier(x)) => Some(x.nodes.0),
-        Some(RefNode::EscapedIdentifier(x)) => Some(x.nodes.0),
-        _ => None,
-    }
-}
 fn glob_files(path: String, rtl_files: &mut Vec<PathBuf>) {
     //parse all files with .sv and .v suffixes
     for rtl_name in glob(&format!("{}/*.sv", path))
