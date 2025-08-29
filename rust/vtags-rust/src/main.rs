@@ -1,9 +1,8 @@
-#![allow(clippy::collapsible_match)]
 extern crate glob;
 use clap::{Parser, Subcommand};
 use glob::glob;
 use std::{collections::HashMap, path::PathBuf};
-use sv_parser::{RefNode, SyntaxTree, parse_sv, unwrap_locate, unwrap_node};
+use sv_parser::{ModuleIdentifier, PackedDimension, RefNode, SyntaxTree, VariableIdentifier, parse_sv, unwrap_locate, unwrap_node};
 use vtags_rust::{get_id, print_identifier};
 
 #[derive(Parser, Debug)]
@@ -53,6 +52,23 @@ struct ModuleStruct {
     instances: Option<Vec<Instance>>,
 
     // Signal connectivity mapping
+    /*
+    SignalOfInterest, Vec<Connection>
+        --> SignalWeGoTo, Enum(ToPort or ToInstance or ToAnotherNet)
+
+    1) Net is driven by a signal, Net DRIVES an input of an instance or another signal
+        wire a;
+        wire b
+        assign a = b;
+    2) Net is a pass through from 2 instances
+        wire a;
+        inst1 .sig_0(a)
+        inst2 .sig_i(a)
+    3) Always block driving it
+        always_comb/ff begin
+            a = b;
+        end
+    */
     signal_connections: Option<HashMap<String, Vec<Connection>>>,
 }
 
@@ -165,7 +181,9 @@ fn main() {
 
                 for module_info in module {
                     let mut port = Port { name: None, direction: None, width: Some(1) };
-                    let mut nets = Signal { name: None, width: None, net_types: None };
+                    let mut nets_netd = Signal { name: None, width: Some(1), net_types: None };
+                    let mut nets_datad = Signal { name: None, width: Some(1), net_types: None };
+                    let mut instance = Instance { instance_name: None, module_type: None, port_connections: Some(HashMap::new()) };
 
                     // Look for ANSI port declarations
                     if let RefNode::AnsiPortDeclaration(port_decl) = module_info {
@@ -186,36 +204,7 @@ fn main() {
                                 if let RefNode::NetPortHeader(net_header) = ports_internal_attr {
                                     for header_child in net_header {
                                         if let RefNode::PackedDimension(packed_d_enum) = header_child {
-                                            match packed_d_enum {
-                                                sv_parser::PackedDimension::Range(range) => {
-                                                    let mut msb_val = None;
-                                                    let mut lsb_val = None;
-                                                    let mut number_count = 0;
-
-                                                    // Extract MSB and LSB from the range
-                                                    for range_child in range.into_iter() {
-                                                        if let RefNode::ConstantExpression(expr) = range_child {
-                                                            //println!("value is: {:?}", syntax_tree.get_str(unwrap_locate!(expr).unwrap()));
-                                                            let num = syntax_tree.get_str(unwrap_locate!(expr).unwrap());
-                                                            if number_count == 0 {
-                                                                msb_val = num;
-                                                            } else if number_count == 1 {
-                                                                lsb_val = num;
-                                                            }
-                                                            number_count += 1;
-                                                        }
-                                                    }
-
-                                                    if let (Some(msb), Some(lsb)) = (msb_val, lsb_val) {
-                                                        let width = (msb.parse::<i32>().unwrap() - lsb.parse::<i32>().unwrap() + 1).unsigned_abs();
-                                                        port.width = Some(width);
-                                                        //println!("Calculated width: {} from [{}:{}]", width, msb, lsb);
-                                                    }
-                                                }
-                                                sv_parser::PackedDimension::UnsizedDimension(_) => {
-                                                    port.width = Some(1); // single bit
-                                                }
-                                            };
+                                            port.width = get_signal_width(&syntax_tree, packed_d_enum);
                                         }
                                     }
                                 }
@@ -227,13 +216,10 @@ fn main() {
                     if let RefNode::ModuleInstantiation(inst) = module_info {
                         //print_identifier!(syntax_tree, inst, InstanceIdentifier, "Instance");
                         //print_identifier!(syntax_tree, inst, InterfaceInstantiation, "Instance");
-                        let mut instance = Instance {
-                            instance_name: get_id!(syntax_tree, inst, InstanceIdentifier),
-                            module_type: get_id!(syntax_tree, inst, ModuleIdentifier),
-                            port_connections: Some(HashMap::new()),
-                        };
+                        instance.instance_name = get_id!(syntax_tree, inst, InstanceIdentifier);
+                        instance.module_type = get_id!(syntax_tree, inst, ModuleIdentifier);
 
-                        for ports in inst.into_iter() {
+                        for ports in inst {
                             if let RefNode::NamedPortConnection(port) = ports {
                                 //print_identifier!(syntax_tree, port, PortIdentifier, "Port Connections");
                                 for child in port {
@@ -288,53 +274,58 @@ fn main() {
                         for net in wires {
                             if let RefNode::NetIdentifier(net_name) = net {
                                 //println!("net name is: {:?}" ,get_id!(syntax_tree, net_name, NetIdentifier));
-                                nets.name = get_id!(syntax_tree, net_name, NetIdentifier);
+                                nets_netd.name = get_id!(syntax_tree, net_name, NetIdentifier);
                             }
                             if let RefNode::NetType(net_type) = net {
                                 //println!("netType is: {:?}", syntax_tree.get_str(unwrap_locate!(net_type).unwrap()));
-                                nets.net_types = Some(syntax_tree.get_str(unwrap_locate!(net_type).unwrap()).unwrap().to_owned());
+                                nets_netd.net_types = Some(syntax_tree.get_str(unwrap_locate!(net_type).unwrap()).unwrap().to_owned());
                             }
                             for exp in net {
                                 if let RefNode::PackedDimension(packed_d_enum) = exp {
-                                    if let sv_parser::PackedDimension::Range(range) = packed_d_enum {
-                                        let mut msb_val = None;
-                                        let mut lsb_val = None;
-                                        let mut number_count = 0;
-                                        // Extract MSB and LSB from the range
-                                        for range_child in range.into_iter() {
-                                            if let RefNode::ConstantExpression(expr) = range_child {
-                                                //println!("value is: {:?}", syntax_tree.get_str(unwrap_locate!(expr).unwrap()));
-                                                let num = syntax_tree.get_str(unwrap_locate!(expr).unwrap());
-                                                if number_count == 0 {
-                                                    msb_val = num;
-                                                } else if number_count == 1 {
-                                                    lsb_val = num;
-                                                }
-                                                number_count += 1;
-                                            }
-                                        }
-                                        if let (Some(msb), Some(lsb)) = (msb_val, lsb_val) {
-                                            let width = (msb.parse::<i32>().unwrap() - lsb.parse::<i32>().unwrap() + 1).unsigned_abs();
-                                            nets.width = Some(width);
-                                            //println!("Calculated width: {} from [{}:{}]", width, msb, lsb);
-                                        }
-                                    }
-                                    //let pd_val = syntax_tree.get_str(unwrap_locate!(pd).unwrap());
-                                    //println!("pd is: {:?}", pd_val);
+                                    nets_netd.width = get_signal_width(&syntax_tree, packed_d_enum);
                                 }
                             }
                         }
-                        nets_struct.push(nets);
+                        nets_struct.push(nets_netd.clone());
                     }
-                }
-                mod_s.instances = Some(instances_struct.clone());
-                mod_s.ports = Some(port_struct.clone());
-                mod_s.internal_signals = Some(nets_struct.clone());
+                    if let RefNode::DataDeclaration(wires) = module_info {
+                        for net in wires {
+                            if let RefNode::DataType(net_name) = net {
+                                //println!("data type is: {:?}", syntax_tree.get_str(unwrap_locate!(net_name).unwrap()).unwrap().to_owned());
+                                nets_datad.net_types = Some(syntax_tree.get_str(unwrap_locate!(net_name).unwrap()).unwrap().to_owned());
+                            }
+                            if let RefNode::VariableIdentifier(net_type) = net {
+                                //println!("net_type: {:?}", net_type);
+                                //print_identifier!(syntax_tree, net_type, VariableIdentifier, "printi:");
+                                //println!("unwrap_loc is: {:?}", syntax_tree.get_str(unwrap_locate!(net_type).unwrap()));
+                                //println!("name is: {:?}", get_id!(syntax_tree, net_type, VariableIdentifier));
+                                nets_datad.name = Some(syntax_tree.get_str(unwrap_locate!(net_type).unwrap()).unwrap().to_owned());
+                                //nets_datad.name = get_id!(syntax_tree, net_type, DataDeclarationVariable);
+                            }
+                            for exp in net {
+                                if let RefNode::PackedDimension(packed_d_enum) = exp {
+                                    //println!("signal width: {:?}", get_signal_width(&syntax_tree, packed_d_enum));
+                                    nets_datad.width = get_signal_width(&syntax_tree, packed_d_enum);
+                                }
+                            }
+                        }
+                        //NOTE: When parsing out identifiers, assignments in always blocks get captured. This filters them out
+                        if nets_datad.net_types.is_some() {
+                            nets_struct.push(nets_datad.clone());
+                        }
+                    }
+                } // end for module_info in module
+
+                //If the structs are empty, we should return None
+                mod_s.instances = if instances_struct.is_empty() { None } else { Some(instances_struct.clone()) };
+                mod_s.ports = if port_struct.is_empty() { None } else { Some(port_struct.clone()) };
+                mod_s.internal_signals = if nets_struct.is_empty() { None } else { Some(nets_struct.clone()) };
+
                 //We must clear the structs that way the next module does not reuse any information
                 instances_struct.clear();
                 port_struct.clear();
                 nets_struct.clear();
-            }
+            } // end ModuleDeclarationAnsi
             //TODO: Uncomment below for all Nonansi type modules. Copy paste above. Refactor in future
             // else if let RefNode::ModuleDeclarationNonansi(module) = node {...}
         }
@@ -347,5 +338,38 @@ fn glob_files(path: String, rtl_files: &mut Vec<PathBuf>) {
     //parse all files with .sv and .v suffixes
     for rtl_name in glob(&format!("{}/*.sv", path)).unwrap().chain(glob(&format!("{}/*.v", path)).unwrap()) {
         rtl_files.push(rtl_name.unwrap())
+    }
+}
+fn get_signal_width(syntax_tree: &SyntaxTree, packed_d_enum: &PackedDimension) -> Option<u32> {
+    match packed_d_enum {
+        sv_parser::PackedDimension::Range(range) => {
+            let mut msb_val = None;
+            let mut lsb_val = None;
+            let mut number_count = 0;
+            // Extract MSB and LSB from the range
+            for range_child in range.into_iter() {
+                if let RefNode::ConstantExpression(expr) = range_child {
+                    //println!("value is: {:?}", syntax_tree.get_str(unwrap_locate!(expr).unwrap()));
+                    let num = syntax_tree.get_str(unwrap_locate!(expr).unwrap());
+                    if number_count == 0 {
+                        msb_val = num;
+                    } else if number_count == 1 {
+                        lsb_val = num;
+                    }
+                    number_count += 1;
+                }
+            }
+            let result = match (msb_val, lsb_val) {
+                (msb, lsb) => {
+                    let width = (msb.unwrap().parse::<i32>().unwrap() - lsb.unwrap().parse::<i32>().unwrap() + 1).unsigned_abs();
+                    Some(width)
+                    //println!("Calculated width: {} from [{}:{}]", width, msb, lsb);
+                }
+            };
+            result
+        }
+        sv_parser::PackedDimension::UnsizedDimension(_) => {
+            Some(1) // single bit
+        }
     }
 }
