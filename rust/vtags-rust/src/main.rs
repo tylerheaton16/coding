@@ -1,8 +1,9 @@
+#![allow(clippy::collapsible_match)]
 extern crate glob;
 use clap::{Parser, Subcommand};
 use glob::glob;
 use std::{collections::HashMap, path::PathBuf};
-use sv_parser::{RefNode, SyntaxTree, parse_sv, unwrap_node};
+use sv_parser::{RefNode, SyntaxTree, parse_sv, unwrap_locate, unwrap_node};
 use vtags_rust::{get_id, print_identifier};
 
 #[derive(Parser, Debug)]
@@ -66,8 +67,9 @@ struct Port {
 #[derive(Default, Debug, Clone)]
 #[allow(dead_code)]
 struct Signal {
-    name: String,
+    name: Option<String>,
     width: Option<u32>,
+    net_types: Option<String>,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -114,6 +116,7 @@ fn main() {
     let mut module_struct: HashMap<String, ModuleStruct> = HashMap::new();
     let mut instances_struct: Vec<Instance> = Vec::new();
     let mut port_struct: Vec<Port> = Vec::new();
+    let mut nets_struct: Vec<Signal> = Vec::new();
 
     /*
     TODO: add defines to CLI
@@ -161,7 +164,8 @@ fn main() {
                 mod_s.module_name = get_id!(syntax_tree, module, ModuleIdentifier);
 
                 for module_info in module {
-                    let mut port = Port { name: None, direction: None, width: Some(1)};
+                    let mut port = Port { name: None, direction: None, width: Some(1) };
+                    let mut nets = Signal { name: None, width: None, net_types: None };
 
                     // Look for ANSI port declarations
                     if let RefNode::AnsiPortDeclaration(port_decl) = module_info {
@@ -191,36 +195,21 @@ fn main() {
                                                     // Extract MSB and LSB from the range
                                                     for range_child in range.into_iter() {
                                                         if let RefNode::ConstantExpression(expr) = range_child {
-                                                            for expr_child in expr {
-                                                                if let RefNode::ConstantPrimary(primary) = expr_child {
-                                                                    for primary_child in primary {
-                                                                        if let RefNode::IntegralNumber(number) = primary_child {
-                                                                            for number_child in number {
-                                                                                if let RefNode::Locate(loc) = number_child {
-                                                                                    if let Some(num_str) = syntax_tree.get_str(loc) {
-                                                                                        if let Ok(num) = num_str.parse::<u32>() {
-                                                                                            //When we iterate on the Integral number. We get an MSB and an LSB. We must compute the width here
-                                                                                            if number_count == 0 {
-                                                                                                msb_val = Some(num);
-                                                                                            } else if number_count == 1 {
-                                                                                                lsb_val = Some(num);
-                                                                                            }
-                                                                                            number_count += 1;
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
+                                                            //println!("value is: {:?}", syntax_tree.get_str(unwrap_locate!(expr).unwrap()));
+                                                            let num = syntax_tree.get_str(unwrap_locate!(expr).unwrap());
+                                                            if number_count == 0 {
+                                                                msb_val = num;
+                                                            } else if number_count == 1 {
+                                                                lsb_val = num;
                                                             }
+                                                            number_count += 1;
                                                         }
                                                     }
 
                                                     if let (Some(msb), Some(lsb)) = (msb_val, lsb_val) {
-                                                        let width = (msb as i32 - lsb as i32 + 1).unsigned_abs();
+                                                        let width = (msb.parse::<i32>().unwrap() - lsb.parse::<i32>().unwrap() + 1).unsigned_abs();
                                                         port.width = Some(width);
-                                                        println!("Calculated width: {} from [{}:{}]", width, msb, lsb);
+                                                        //println!("Calculated width: {} from [{}:{}]", width, msb, lsb);
                                                     }
                                                 }
                                                 sv_parser::PackedDimension::UnsizedDimension(_) => {
@@ -247,10 +236,10 @@ fn main() {
                         for ports in inst.into_iter() {
                             if let RefNode::NamedPortConnection(port) = ports {
                                 //print_identifier!(syntax_tree, port, PortIdentifier, "Port Connections");
-                                for child in port.into_iter() {
+                                for child in port {
                                     if let RefNode::Expression(expr) = child {
                                         // Look for HierarchicalIdentifier in the expression
-                                        for expr_child in expr.into_iter() {
+                                        for expr_child in expr {
                                             if let RefNode::HierarchicalIdentifier(hier_id) = expr_child {
                                                 let port_name = get_id!(syntax_tree, port, PortIdentifier);
 
@@ -295,12 +284,56 @@ fn main() {
                         }
                         instances_struct.push(instance);
                     }
+                    if let RefNode::NetDeclaration(wires) = module_info {
+                        for net in wires {
+                            if let RefNode::NetIdentifier(net_name) = net {
+                                //println!("net name is: {:?}" ,get_id!(syntax_tree, net_name, NetIdentifier));
+                                nets.name = get_id!(syntax_tree, net_name, NetIdentifier);
+                            }
+                            if let RefNode::NetType(net_type) = net {
+                                //println!("netType is: {:?}", syntax_tree.get_str(unwrap_locate!(net_type).unwrap()));
+                                nets.net_types = Some(syntax_tree.get_str(unwrap_locate!(net_type).unwrap()).unwrap().to_owned());
+                            }
+                            for exp in net {
+                                if let RefNode::PackedDimension(packed_d_enum) = exp {
+                                    if let sv_parser::PackedDimension::Range(range) = packed_d_enum {
+                                        let mut msb_val = None;
+                                        let mut lsb_val = None;
+                                        let mut number_count = 0;
+                                        // Extract MSB and LSB from the range
+                                        for range_child in range.into_iter() {
+                                            if let RefNode::ConstantExpression(expr) = range_child {
+                                                //println!("value is: {:?}", syntax_tree.get_str(unwrap_locate!(expr).unwrap()));
+                                                let num = syntax_tree.get_str(unwrap_locate!(expr).unwrap());
+                                                if number_count == 0 {
+                                                    msb_val = num;
+                                                } else if number_count == 1 {
+                                                    lsb_val = num;
+                                                }
+                                                number_count += 1;
+                                            }
+                                        }
+                                        if let (Some(msb), Some(lsb)) = (msb_val, lsb_val) {
+                                            let width = (msb.parse::<i32>().unwrap() - lsb.parse::<i32>().unwrap() + 1).unsigned_abs();
+                                            nets.width = Some(width);
+                                            //println!("Calculated width: {} from [{}:{}]", width, msb, lsb);
+                                        }
+                                    }
+                                    //let pd_val = syntax_tree.get_str(unwrap_locate!(pd).unwrap());
+                                    //println!("pd is: {:?}", pd_val);
+                                }
+                            }
+                        }
+                        nets_struct.push(nets);
+                    }
                 }
                 mod_s.instances = Some(instances_struct.clone());
                 mod_s.ports = Some(port_struct.clone());
+                mod_s.internal_signals = Some(nets_struct.clone());
                 //We must clear the structs that way the next module does not reuse any information
                 instances_struct.clear();
                 port_struct.clear();
+                nets_struct.clear();
             }
             //TODO: Uncomment below for all Nonansi type modules. Copy paste above. Refactor in future
             // else if let RefNode::ModuleDeclarationNonansi(module) = node {...}

@@ -21,7 +21,24 @@ pub mod macros {
                     println!("Failed to get identifier location");
                 }
             } else {
+                //TODO: Implement panic! where it reports it failed to find.
+                //this means that the hierarchy traversal in main.rs is incorrect
                 println!("Failed to find {} in node", stringify!($id_type));
+            }
+        };
+    }
+
+    #[macro_export]
+    macro_rules! get_id {
+        ($syntax_tree:expr, $ref_node:expr, $id_type:tt) => {
+            if let Some(identifier) = unwrap_node!($ref_node, $id_type) {
+                if let Some(identifier_loc) = $crate::macros::get_identifier(identifier) {
+                    $syntax_tree.get_str(&identifier_loc).map(|s| s.to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
             }
         };
     }
